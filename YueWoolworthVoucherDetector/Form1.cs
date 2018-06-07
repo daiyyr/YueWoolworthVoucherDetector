@@ -15,6 +15,8 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 using System.Xml;
+using CommControl;
+using System.Globalization;
 
 namespace YueWoolworthVoucherDetector
 {
@@ -853,6 +855,32 @@ namespace YueWoolworthVoucherDetector
             //DataTable dt = new DataTable();
             //adapter.Fill(dt);
             //return dt;
+        }
+        public static void DataTableToCsv(DataTable table, string file)
+        {
+            string title = "";
+            FileStream fs = new FileStream(file, FileMode.Create);
+            StreamWriter sw = new StreamWriter(new BufferedStream(fs), System.Text.Encoding.Default);
+            for (int i = 0; i < table.Columns.Count; i++)
+            {
+                title += table.Columns[i].ColumnName + ",";
+            }
+            title = title.Substring(0, title.Length - 1) + "\r\n";
+            sw.Write(title);
+
+            foreach (DataRow row in table.Rows)
+            {
+                string line = "";
+                for (int i = 0; i < table.Columns.Count; i++)
+                {
+                    line += "\"" + row[i].ToString().Replace("\"", "\"\"") + "\",";
+                }
+                line = line.Substring(0, line.Length - 1) + "\r\n";
+                sw.Write(line);
+            }
+
+            sw.Close();
+            fs.Close();
         }
         #endregion
 
@@ -2030,23 +2058,26 @@ namespace YueWoolworthVoucherDetector
             return ret;
         }
 
+        string posip = "192.168.1.75";
         private byte[] DLE = new byte[] { 0x10 };
         private byte[] STX = new byte[] { 0x02 };
         private byte[] ETX = new byte[] { 0x03 };
+        private byte[] ACK = new byte[] { 0x06 };
         private byte FS = 0x1C ;
         const int COMMA = 0x2C;
         int refNum = 1198999;
-        System.Net.Sockets.TcpClient clientSocket;
+        public System.Net.Sockets.TcpClient clientSocket;
         //for testing
+        //Purchase
         private void findLongNum_Click(object sender, EventArgs e)
         {
             try
             {
-
+                Control co = new Control();
+                CommControl.CommControl.ControlCollection cc = new Control.ControlCollection(co);
+                
                 // STX = Combine(DLE, STX);
                 //  ETX = Combine(DLE, ETX);
-
-                refNum++;
 
                 //purchase
                 string data = refNum.ToString() + ",PUR,1,000004.71,000000.00,POS 1,YYYNYY,,";
@@ -2116,17 +2147,243 @@ namespace YueWoolworthVoucherDetector
                 byte[] c2 = Combine(c1, ETX);
                 byte[] c3 = Combine(c2, LRC);
 
-                clientSocket = new System.Net.Sockets.TcpClient();
-                clientSocket.Connect("192.168.1.69", 4444);
+
+                if (clientSocket == null || !clientSocket.Connected)
+                {
+                    if (clientSocket != null)
+                    {
+                        clientSocket.Close();
+                    }
+                    clientSocket = new System.Net.Sockets.TcpClient();
+                    clientSocket.Connect(posip, 4444);
+                }
                 NetworkStream serverStream = clientSocket.GetStream();
                 serverStream.ReadTimeout = 3000;
                 serverStream.Write(c3, 0, c3.Length);
                 serverStream.Flush();
+
+                #region read after write
+                /*
+                byte[] inStream = new byte[clientSocket.ReceiveBufferSize];
+                serverStream.Read(inStream, 0, clientSocket.ReceiveBufferSize);
+                List<List<int>> storedMessage = new List<List<int>>();
+
+                List<int> message = new List<int>();
+                bool DLE = false;
+                bool nextIsLRC = false;
+                bool startXor = false;
+                int Xor = 0;
+                foreach (byte b in inStream)
+                {
+                    if (nextIsLRC)
+                    {
+                        nextIsLRC = false;
+                        if (Xor == b) // check LRC succeed
+                        {
+                            storedMessage.Add(message.Select(item => item).ToList());
+                            message.Clear();
+                        }
+                        else        // check LRC failed
+                        {
+                            message.Clear();
+                        }
+                        continue;
+                    }
+                    if (startXor)
+                    {
+                        startXor = false;
+                        Xor = b;
+                    }
+                    else
+                    {
+                        Xor ^= b;
+                    }
+                    if (DLE)
+                    {
+                        DLE = false;
+                        message.Add(b);
+                        continue;
+                    }
+                    if (b == 0x10)
+                    {
+                        DLE = true;
+                        continue;
+                    }
+                    if (b == FS)
+                    {
+                        message.Add(COMMA);
+                        continue;
+                    }
+                    if (b == 0x02) //message start
+                    {
+                        startXor = true;
+                        continue;
+                    }
+                    if (b == 0x03) //message end
+                    {
+                        message.Add('\r');
+                        message.Add('\n');
+                        nextIsLRC = true;
+                        continue;
+                    }
+                    if (b == 0x05) //Enquiry
+                    {
+                        continue;
+                    }
+                    if (b == 0x06) //Acknowledgment
+                    {
+                        continue;
+                    }
+                    if (b == 21) //unknown
+                    {
+                        continue;
+                    }
+                    message.Add(b);
+                }
+                if (storedMessage.Count == 0 || storedMessage[0].Count == 0 || storedMessage[0][0] == 0)
+                {
+                    setLogtColorful(richTextBox1, "read null" +
+                            Environment.NewLine, Color.Red);
+                }
+                foreach (List<int> t in storedMessage)
+                {
+                    byte[] temp = new byte[t.Count];
+                    for (int i = 0; i < temp.Length; i++)
+                    {
+                        temp[i] = BitConverter.GetBytes(t[i])[0];
+                    }
+
+                    string returndata = System.Text.Encoding.ASCII.GetString(temp);
+                    string[] messageDetails = returndata.Split(',');
+                    string UniqueSequenceReference = messageDetails[0];
+                    string MessageType = messageDetails[1];
+                    string MerchantNumber = messageDetails[2];
+                    string Response = messageDetails[3];
+                    string Display = "";
+                    if (messageDetails.Length > 4)
+                    {
+                        Display = messageDetails[4];
+                    }
+
+                    if (
+                           MessageType != "POL" //if it POL, the UniqueSequenceReference is always "XXXXXX", not sure whether it's a bug for the test terminal
+                        && UniqueSequenceReference != refNum.ToString()
+                        )
+                    {
+
+                        setLogtColorful(richTextBox1, "Response Sequence Reference<" + UniqueSequenceReference + "> does not match request<" + refNum + ">!" +
+                            Environment.NewLine, Color.Red);
+                        clientSocket.Close();
+                        continue;
+                    }
+                    else if (MessageType == "ERR")
+                    {
+                        if (Response == "02")
+                        {
+                            setLogtColorful(richTextBox1, "Invalid Request!" +
+                            Environment.NewLine, Color.Red);
+                        }
+                        else if (Response == "08")
+                        {
+                            setLogtColorful(richTextBox1, "Invalid Reference!" +
+                            Environment.NewLine, Color.Red);
+                        }
+                        clientSocket.Close();
+                    }
+                    else if (MessageType == "DSP")
+                    {
+                        setLogtColorful(richTextBox1, Response + Environment.NewLine, Color.Green);
+                        if (Display == "99") //Transaction Outcome
+                        {
+                            // clientSocket.Close();
+                        }
+                    }
+                    else if (MessageType == "PUR")
+                    {
+                        if (messageDetails[5] == "00") //Accepted
+                        {
+
+                        }
+                        else if (messageDetails[5] == "01") //Declined
+                        {
+
+                        }
+                        else if (messageDetails[5] == "04") //Transaction Cancelled (time out or cancel key pressed)
+                        {
+
+                        }
+                        setLogtColorful(richTextBox1, "Purchase Result: " + messageDetails[6]
+                            + Environment.NewLine, Color.Green);
+                        clientSocket.Close();
+                    }
+                    else if (MessageType == "NFO")
+                    {
+                        setLogtColorful(richTextBox1, "Customer action: " + Response + ", " + Display
+                            + Environment.NewLine, Color.Green);
+                    }
+                    else if (MessageType == "POL")
+                    {
+                        if (Response == "80")
+                        {
+                            setLogtColorful(richTextBox1, "Poll result: Ready"
+                            + Environment.NewLine, Color.Green);
+                        }
+                        else if (Response == "81")
+                        {
+                            setLogtColorful(richTextBox1, "Poll result: Transaction in progress"
+                            + Environment.NewLine, Color.Green);
+                        }
+                        else if (Response == "82")
+                        {
+                            setLogtColorful(richTextBox1, "Poll result: – Signature in progress"
+                            + Environment.NewLine, Color.Green);
+                        }
+                        else if (Response == "83")
+                        {
+                            setLogtColorful(richTextBox1, "Poll result: – Session ID Not Authentic – TSPID wrong"
+                            + Environment.NewLine, Color.Green);
+                        }
+
+                        //do not close in real program
+                        //   clientSocket.Close();
+                    }
+                    //poll
+                    //cancelled
+                    //imformation
+                    //confirmation
+                    //moto purchase
+                    //signature request
+                    //cash out
+                    //refund
+                    //REFUND WITH MANUAL PAN
+                    //LOGON
+                    //PARAMETER DOWNLOAD
+                    //TERMINAL TOTALS
+                    //SETTLEMENT CUTOVER/CLOSE BATCH
+                    //SETTLEMENT ENQUIRY / HISTORICAL SETTLEMENT
+                    //REPRINT LAST RECEIPT
+                    //QUERY CARD
+                    //POS RECEIPT PRINTING
+                    //HEADER & FOOTER CONFIGURATION FOR TERMINAL RECEIPTS
+                    //PRINT TERMINAL RECEIPT ON POS
+                    //REPORTS
+                    //REPORT TYPE DEFINITIONS
+                    //DIAGNOSTICS
+                    //HOST COMMS TX MESSAGE
+                    //DDX SEND TO HOST USING DIAL COMMAND
+                    //DDI CONNECT TO HOST USING DIAL COMMAND
+                }
+                */
+                #endregion
+
+
+
+
                 #region another way
                 /*
                 Socket sender1 = new Socket(AddressFamily.InterNetwork,
                     SocketType.Stream, ProtocolType.Tcp);
-                IPEndPoint remoteEP = new IPEndPoint(IPAddress.Parse("192.168.1.69"), 4444);
+                IPEndPoint remoteEP = new IPEndPoint(IPAddress.Parse(posip), 4444);
                 sender1.Connect(remoteEP);
 
                 byte[] c1 = Combine(STX, Txn);
@@ -2146,7 +2403,7 @@ namespace YueWoolworthVoucherDetector
                 */
                 #endregion
             }
-            catch(Exception ex)
+            catch (Exception ex)
             {
                 if (ex.Message.Contains("connected party did not properly respond after a period of time"))
                 {
@@ -2237,7 +2494,7 @@ namespace YueWoolworthVoucherDetector
                 List<string> lines = File.ReadAllLines(filePath).Distinct().ToList();
                 foreach (string line in lines)
                 {
-                    var regex = new Regex(@"(?=pptyins_master_policy_num \= \')(\s|\S)*?(?<=\'\,)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+                    var regex = new Regex(@"(?<=pptyins_master_policy_num \= \')(\s|\S)*?(?=\'\,)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
                     var regMatch = regex.Match(line);
                     if (regMatch.Success)
                     {
@@ -2252,6 +2509,7 @@ namespace YueWoolworthVoucherDetector
             #endregion
         }
 
+        //Read
         private void button1_Click_1(object sender, EventArgs e)
         {
             try
@@ -2338,7 +2596,11 @@ namespace YueWoolworthVoucherDetector
                         }
                         message.Add(b);
                     }
-
+                    if (storedMessage.Count == 0 || storedMessage[0].Count == 0 || storedMessage[0][0] == 0)
+                    {
+                        setLogtColorful(richTextBox1, "read null" +
+                                Environment.NewLine, Color.Red);
+                    }
                     foreach (List<int> t in storedMessage)
                     {
                         byte[] temp = new byte[t.Count];
@@ -2439,7 +2701,7 @@ namespace YueWoolworthVoucherDetector
                             }
 
                             //do not close in real program
-                            clientSocket.Close();
+                         //   clientSocket.Close();
                         }
                         //poll
                         //cancelled
@@ -2488,6 +2750,400 @@ namespace YueWoolworthVoucherDetector
                 }
             }
              
+        }
+        
+        private void Poll_Click(object sender, EventArgs e)
+        {
+            try
+            {
+
+                // STX = Combine(DLE, STX);
+                //  ETX = Combine(DLE, ETX);
+
+                //  refNum++;
+
+                //purchase
+           //     string data = refNum.ToString() + ",PUR,1,000004.71,000000.00,POS 1,YYYNYY,,";
+
+                //STATUS POLL
+                string data = refNum.ToString() + ",POL,1,2.4,Uxtrata,1.2.34,,N,Session ID";
+
+
+                byte[] Txn = System.Text.Encoding.ASCII.GetBytes(data);
+                byte[] LRC = null;
+
+                #region replace comma
+                for (int i = 0; i < Txn.Length; i++)
+                {
+                    if (Txn[i] == COMMA)
+                    {
+                        Txn[i] = FS;
+                    }
+                }
+
+                #endregion
+                #region LRC: XOR of all characters after STX until the end of packet including ETX
+                int LRC_int = 0;
+                for (int i = 0; i < Txn.Length; i++)
+                {
+                    if (i == 0)
+                    {
+                        LRC_int = Txn[i];
+                    }
+                    else
+                    {
+                        LRC_int = LRC_int ^ Txn[i];
+                    }
+                }
+                for (int i = 0; i < ETX.Length; i++)
+                {
+                    LRC_int = LRC_int ^ ETX[i];
+                }
+                LRC = BitConverter.GetBytes(LRC_int);
+                #endregion
+
+                byte[] c1 = Combine(STX, Txn);
+                byte[] c2 = Combine(c1, ETX);
+                byte[] c3 = Combine(c2, LRC);
+                if(clientSocket == null || !clientSocket.Connected)
+                {
+                    if (clientSocket != null)
+                    {
+                        clientSocket.Close();
+                    }
+                    clientSocket = new System.Net.Sockets.TcpClient();
+                    clientSocket.Connect(posip, 4444);
+                }
+                NetworkStream serverStream = clientSocket.GetStream();
+                serverStream.ReadTimeout = 3000;
+                serverStream.Write(c3, 0, c3.Length);
+                serverStream.Flush();
+            }
+            catch (Exception ex)
+            {
+                if (ex.Message.Contains("connected party did not properly respond after a period of time"))
+                {
+                    setLogtColorful(richTextBox1, "Terminal Busy. Please Wait…" + Environment.NewLine, Color.Blue);
+                    //Thread.Sleep(3000);
+                }
+                else
+                {
+                    setLogtColorful(richTextBox1, ex.Message + Environment.NewLine, Color.Red);
+                    if (clientSocket != null && clientSocket.Connected)
+                    {
+                        clientSocket.Close();
+                    }
+                }
+            }
+
+
+            return;
+        }
+
+        private void close_socket(object sender, EventArgs e)
+        {
+            if (clientSocket != null && clientSocket.Connected)
+            {
+                clientSocket.Close();
+            }
+        }
+
+        private void reprint_click(object sender, EventArgs e)
+        {
+            try
+            {
+                string data = refNum.ToString() + ",REP,1,Spec Version,NYYNYY,";
+
+
+                byte[] Txn = System.Text.Encoding.ASCII.GetBytes(data);
+                byte[] LRC = null;
+
+                #region replace comma
+                for (int i = 0; i < Txn.Length; i++)
+                {
+                    if (Txn[i] == COMMA)
+                    {
+                        Txn[i] = FS;
+                    }
+                }
+
+                #endregion
+                #region LRC: XOR of all characters after STX until the end of packet including ETX
+                int LRC_int = 0;
+                for (int i = 0; i < Txn.Length; i++)
+                {
+                    if (i == 0)
+                    {
+                        LRC_int = Txn[i];
+                    }
+                    else
+                    {
+                        LRC_int = LRC_int ^ Txn[i];
+                    }
+                }
+                for (int i = 0; i < ETX.Length; i++)
+                {
+                    LRC_int = LRC_int ^ ETX[i];
+                }
+                LRC = BitConverter.GetBytes(LRC_int);
+                #endregion
+
+                byte[] c1 = Combine(STX, Txn);
+                byte[] c2 = Combine(c1, ETX);
+                byte[] c3 = Combine(c2, LRC);
+                if (clientSocket == null || !clientSocket.Connected)
+                {
+                    if (clientSocket != null)
+                    {
+                        clientSocket.Close();
+                    }
+                    clientSocket = new System.Net.Sockets.TcpClient();
+                    clientSocket.Connect(posip, 4444);
+                }
+                NetworkStream serverStream = clientSocket.GetStream();
+                serverStream.ReadTimeout = 3000;
+                serverStream.Write(c3, 0, c3.Length);
+                serverStream.Flush();
+            }
+            catch (Exception ex)
+            {
+                if (ex.Message.Contains("connected party did not properly respond after a period of time"))
+                {
+                    setLogtColorful(richTextBox1, "Terminal Busy. Please Wait…" + Environment.NewLine, Color.Blue);
+                    //Thread.Sleep(3000);
+                }
+                else
+                {
+                    setLogtColorful(richTextBox1, ex.Message + Environment.NewLine, Color.Red);
+                    if (clientSocket != null && clientSocket.Connected)
+                    {
+                        clientSocket.Close();
+                    }
+                }
+            }
+
+
+            return;
+        }
+
+        private void changeRef_click(object sender, EventArgs e)
+        {
+
+            refNum++;
+
+        }
+
+        private void ACK_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                if (clientSocket == null || !clientSocket.Connected)
+                {
+                    if (clientSocket != null)
+                    {
+                        clientSocket.Close();
+                    }
+                    clientSocket = new System.Net.Sockets.TcpClient();
+                    clientSocket.Connect(posip, 4444);
+                }
+                NetworkStream serverStream = clientSocket.GetStream();
+                serverStream.ReadTimeout = 3000;
+                serverStream.Write(ACK, 0, ACK.Length);
+                serverStream.Flush();
+            }
+            catch (Exception ex)
+            {
+                if (ex.Message.Contains("connected party did not properly respond after a period of time"))
+                {
+                    setLogtColorful(richTextBox1, "Terminal Busy. Please Wait…" + Environment.NewLine, Color.Blue);
+                    //Thread.Sleep(3000);
+                }
+                else
+                {
+                    setLogtColorful(richTextBox1, ex.Message + Environment.NewLine, Color.Red);
+                    if (clientSocket != null && clientSocket.Connected)
+                    {
+                        clientSocket.Close();
+                    }
+                }
+            }
+
+
+            return;
+        }
+
+        private void button7_Click(object sender, EventArgs e)
+        {
+            DataTable resultDT = new DataTable();
+            resultDT.Columns.Add("Authorized");
+            resultDT.Columns.Add("DateTime");
+            resultDT.Columns.Add("Response");
+            resultDT.Columns.Add("ReCo");
+            resultDT.Columns.Add("Grp Acc");
+            resultDT.Columns.Add("CardNumber");
+            resultDT.Columns.Add("Brand");
+            resultDT.Columns.Add("Amount");
+            resultDT.Columns.Add("Cur");
+            resultDT.Columns.Add("Merchant Ref");
+            resultDT.Columns.Add("DeviceId");
+            resultDT.Columns.Add("TxnType");
+            resultDT.Columns.Add("Void");
+            resultDT.Columns.Add("Complete");
+            string raw = richTextBox2.Text;
+            var regex = new Regex(@"(?<=\<tr onclickid)(\s|\S)*?(?=\<\/tr\>)");
+            var regMatch = regex.Match(raw);
+            while (regMatch.Success)
+            {
+                string line = regMatch.Value;
+                DataRow nr = resultDT.NewRow();
+                var regex2 = new Regex(@"(?<=\<td class\=\'DpsTableCell)(\s|\S)*?(?=\<\/td\>)");
+                var regMatch2 = regex2.Match(line);
+                int columnCount = 0;
+                while (regMatch2.Success)
+                {
+                    columnCount++;
+                    string column = regMatch2.Value;
+                    if(columnCount == 1) //Authorized
+                    {
+                        if (column.Contains("DpsTick DpsField"))
+                        {
+                            nr["Authorized"] = true;
+                        }else
+                        {
+                            nr["Authorized"] = false;
+                        }
+                    }
+                    else if (columnCount == 2)
+                    {
+                        var regex3 = new Regex(@"(?<=id\=\'RxDate\' \>).*?(?=\<\/span\>)", RegexOptions.Compiled);
+                        var regMatch3 = regex3.Match(column);
+                        if (regMatch3.Success)
+                        {
+                            nr["DateTime"] = DateTime.ParseExact(regMatch3.Value, "dd/MM/yyyy HH:mm:ss", CultureInfo.InvariantCulture);
+                        }
+                    }
+                    else if (columnCount == 3)
+                    {
+                        var regex3 = new Regex(@"(?<=placeholder\=\'\' \>).*?(?=\<\/span\>)");
+                        var regMatch3 = regex3.Match(column);
+                        if (regMatch3.Success)
+                        {
+                            nr["Response"] = regMatch3.Value;
+                        }
+                    }
+                    else if (columnCount == 4)
+                    {
+                        var regex3 = new Regex(@"(?<=placeholder\=\'\' \>)(\s|\S)*?(?=\<\/span\>)");
+                        var regMatch3 = regex3.Match(column);
+                        if (regMatch3.Success)
+                        {
+                            nr["ReCo"] = regMatch3.Value;
+                        }
+                    }
+                    else if (columnCount == 5)
+                    {
+                        var regex3 = new Regex(@"(?<=placeholder\=\'\' \>)(\s|\S)*?(?=\<\/span\>)");
+                        var regMatch3 = regex3.Match(column);
+                        if (regMatch3.Success)
+                        {
+                            nr["Grp Acc"] = regMatch3.Value;
+                        }
+                    }
+                    else if (columnCount == 6)
+                    {
+                        var regex3 = new Regex(@"(?<=placeholder\=\'\' \>)(\s|\S)*?(?=\<\/span\>)");
+                        var regMatch3 = regex3.Match(column);
+                        if (regMatch3.Success)
+                        {
+                            nr["CardNumber"] = regMatch3.Value;
+                        }
+                    }
+                    else if (columnCount == 7)
+                    {
+                        var regex3 = new Regex(@"(?<=placeholder\=\'\' \>)(\s|\S)*?(?=\<\/span\>)");
+                        var regMatch3 = regex3.Match(column);
+                        if (regMatch3.Success)
+                        {
+                            nr["Brand"] = regMatch3.Value;
+                        }
+                    }
+                    else if (columnCount == 8)
+                    {
+                        var regex3 = new Regex(@"(?<=NumbersOnly\(event\)\'\>)(\s|\S)*?(?=\<\/span\>)");
+                        var regMatch3 = regex3.Match(column);
+                        if (regMatch3.Success)
+                        {
+                            nr["Amount"] = regMatch3.Value;
+                        }
+                    }
+                    else if (columnCount == 9)
+                    {
+                        var regex3 = new Regex(@"(?<=placeholder\=\'\' \>)(\s|\S)*?(?=\<\/span\>)");
+                        var regMatch3 = regex3.Match(column);
+                        if (regMatch3.Success)
+                        {
+                            nr["Cur"] = regMatch3.Value;
+                        }
+                    }
+                    else if (columnCount == 10)
+                    {
+                        var regex3 = new Regex(@"(?<=placeholder\=\'\' \>)(\s|\S)*?(?=\<\/span\>)");
+                        var regMatch3 = regex3.Match(column);
+                        if (regMatch3.Success)
+                        {
+                            nr["Merchant Ref"] = regMatch3.Value;
+                        }
+                    }
+                    else if (columnCount == 11)
+                    {
+                        var regex3 = new Regex(@"(?<=placeholder\=\'\' \>)(\s|\S)*?(?=\<\/span\>)");
+                        var regMatch3 = regex3.Match(column);
+                        if (regMatch3.Success)
+                        {
+                            nr["DeviceId"] = regMatch3.Value;
+                        }
+                    }
+                    else if (columnCount == 12)
+                    {
+                        var regex3 = new Regex(@"(?<=placeholder\=\'\' \>)(\s|\S)*?(?=\<\/span\>)");
+                        var regMatch3 = regex3.Match(column);
+                        if (regMatch3.Success)
+                        {
+                            nr["TxnType"] = regMatch3.Value;
+                        }
+                    }
+                    else if (columnCount == 13)
+                    {
+                        if (column.Contains("DpsTick DpsField"))
+                        {
+                            nr["Void"] = true;
+                        }
+                        else
+                        {
+                            nr["Void"] = false;
+                        }
+                    }
+                    else if (columnCount == 14)
+                    {
+                        if (column.Contains("DpsTick DpsField"))
+                        {
+                            nr["Complete"] = true;
+                        }
+                        else
+                        {
+                            nr["Complete"] = false;
+                        }
+                    }
+
+
+                    regMatch2 = regMatch2.NextMatch();
+                }
+                resultDT.Rows.Add(nr);
+                regMatch = regMatch.NextMatch();
+            }
+            string file = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "paymentexpress_201806071700.csv");
+            DataTableToCsv(resultDT, file);
+
         }
     }
     interface itest

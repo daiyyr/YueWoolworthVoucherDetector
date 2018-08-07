@@ -17,6 +17,7 @@ using System.Windows.Forms;
 using System.Xml;
 using CommControl;
 using System.Globalization;
+using System.Printing;
 
 namespace YueWoolworthVoucherDetector
 {
@@ -2974,6 +2975,62 @@ namespace YueWoolworthVoucherDetector
 
         private void button7_Click(object sender, EventArgs e)
         {
+            PrintQueueCollection printQueues = null;
+
+            // Get a list of available printers.
+            PrintServer printServer = new PrintServer();
+            printQueues = printServer.GetPrintQueues(new[] { EnumeratedPrintQueueTypes.Local, EnumeratedPrintQueueTypes.Connections });
+
+            foreach (PrintQueue printQueue in printQueues)
+            {
+                // The OneNote printer driver causes crashes in 64bit OSes so for now just don't include it.
+                // Also redirected printer drivers cause crashes for some printers. Another WPF issue that cannot be worked around.
+                if (printQueue.Name.ToUpperInvariant().Contains("ONENOTE") || printQueue.Name.ToUpperInvariant().Contains("REDIRECTED"))
+                {
+                    continue;
+                }
+
+                string status = printQueue.QueueStatus.ToString();
+
+                bool a = printQueue.IsInError;
+                bool b = printQueue.IsOffline;
+                bool c = printQueue.IsHidden;
+
+                try
+                {
+                   var aa = new 
+                    {
+                        Name = printQueue.Name,
+                        FullName = printQueue.FullName,
+                        Status = status,
+                        ClientPrintSchemaVersion = printQueue.ClientPrintSchemaVersion,
+
+                    };
+                    
+                }
+                catch
+                {
+
+                }
+            }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
             DataTable resultDT = new DataTable();
             resultDT.Columns.Add("Authorized");
             resultDT.Columns.Add("DateTime");
